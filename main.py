@@ -52,7 +52,7 @@ def configure_logging_behavior():
     "astrbot_plugin_angel_memory",
     "cruseth",
     "天使的记忆，让astrbot拥有记忆维护系统和开箱即用的知识库检索",
-    "1.3.36",
+    "1.3.37",
     "https://github.com/cruseth/astrbot_plugin_anglememory_fit"
 )
 class AngelMemoryPlugin(Star):

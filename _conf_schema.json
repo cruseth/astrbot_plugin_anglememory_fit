@@ -49,13 +49,13 @@
         "hint": "当前版本固定为按会话窗口隔离；共享记忆通过 shared_scopes 显式配置。"
       },
       "shared_scopes": {
-        "type": "dict",
+        "type": "text",
         "description": "共享记忆映射（会话ID -> 共享scope）",
-        "default": {},
+        "default": "{}",
         "editor_mode": true,
         "editor_language": "json",
         "editor_theme": "vs-dark",
-        "hint": "键填写会话ID（unified_msg_origin），值填写共享记忆域名。示例：{\"aiocqhttp:group:12345\":\"family\",\"aiocqhttp:private:10001\":\"family\"}。未配置的会话会自动使用自己的私有记忆域。scope 名仅允许字母/数字/中文/下划线/短横线。"
+        "hint": "JSON text. Keys are conversation IDs (unified_msg_origin), values are shared scope names. Example: {\"aiocqhttp:group:12345\":\"family\",\"aiocqhttp:private:10001\":\"family\"}. Unmapped conversations use private scopes."
       },
       "legacy_public_scope": {
         "type": "bool",
