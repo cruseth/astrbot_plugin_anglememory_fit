@@ -79,7 +79,7 @@
 
 2. **安装Angel Memory插件**
    ```bash
-   git clone https://github.com/kawayiYokami/astrbot_plugin_angel_memory.git
+   git clone https://github.com/cruseth/astrbot_plugin_anglememory_fit.git astrbot_plugin_angel_memory
    ```
 
 3. **安装依赖**
@@ -442,7 +442,7 @@ memory_behavior:
 
 ```bash
 # 克隆项目
-git clone https://github.com/kawayiYokami/astrbot_plugin_angel_memory.git
+git clone https://github.com/cruseth/astrbot_plugin_anglememory_fit.git astrbot_plugin_angel_memory
 cd astrbot_plugin_angel_memory
 
 # 安装依赖
@@ -459,6 +459,26 @@ ruff format .
 ## 📄 许可证
 
 本项目采用 [GNU General Public License v3.0](LICENSE)。
+
+## 记忆隔离配置
+
+当前版本默认按会话窗口隔离记忆。未配置的会话会根据 `unified_msg_origin` 自动生成私有 `memory_scope`，不会再落到旧版 `public` 默认域。
+
+要让多个会话共享同一份记忆，在 AstrBot 插件配置页填写：
+
+```json
+{
+  "memory_scope": {
+    "shared_scopes": {
+      "aiocqhttp:group:12345": "family",
+      "aiocqhttp:private:10001": "family"
+    },
+    "legacy_public_scope": false
+  }
+}
+```
+
+`conversation_scope_map` 仅作为旧配置兼容入口读取；新配置请使用 `memory_scope.shared_scopes`，并且当前版本不再按人格名默认共享记忆。
 
 ## 🙏 致谢
 

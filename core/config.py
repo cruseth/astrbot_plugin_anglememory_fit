@@ -199,6 +199,9 @@ class MemoryConfig:
             self._enable_local_embedding = (
                 new_local_embedding if "enable_local_embedding" in retrieval else legacy_local_embedding
             )
+        self._memory_scope = config_get("memory_scope", {}) or {}
+        if not isinstance(self._memory_scope, dict):
+            self._memory_scope = {}
         self._conversation_scope_map = config_get("conversation_scope_map", {}) or {}
         self._injection_method = str(config_get("injection_method", "user_message_before") or "user_message_before").strip()
         if self._injection_method not in {"user_message_before", "system_prompt", "user_message_after"}:
@@ -364,6 +367,11 @@ class MemoryConfig:
         return self._conversation_scope_map
 
     @property
+    def memory_scope(self) -> Dict[str, Any]:
+        """记忆域隔离配置（原始值，校验由 PluginContext 负责）。"""
+        return self._memory_scope
+
+    @property
     def injection_method(self) -> str:
         """记忆注入位置。"""
         return self._injection_method
@@ -423,6 +431,7 @@ class MemoryConfig:
             "sleep_interval": self.sleep_interval,
             "default_passive_strength": self.default_passive_strength,
             "enable_local_embedding": self.enable_local_embedding,
+            "memory_scope": self.memory_scope,
             "conversation_scope_map": self.conversation_scope_map,
             "injection_method": self.injection_method,
             "enable_soul_system": self.enable_soul_system,

@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 from pathlib import Path
 import re
 import json
+import hashlib
 
 try:
     from astrbot.api import logger, sp
@@ -57,6 +58,8 @@ class PluginContext:
         self._component_factory = None
         self._scope_name_pattern = re.compile(r"^[a-zA-Z0-9\u4e00-\u9fff_-]+$")
         self._conversation_scope_map: Dict[str, str] = {}
+        self._shared_scope_map: Dict[str, str] = {}
+        self._legacy_public_scope: bool = False
         self._event_persona_cache: Dict[str, str] = {}
 
         # 初始化插件资源
@@ -164,9 +167,8 @@ class PluginContext:
         """获取LLM提供商ID"""
         return self.config.get("provider_id", "")
 
-    def _refresh_scope_map(self) -> None:
-        """读取并校验 conversation_scope_map（非法配置仅告警并忽略）。"""
-        raw_map = self.config.get("conversation_scope_map", {}) or {}
+    def _parse_scope_map(self, raw_map: Any, field_name: str) -> Dict[str, str]:
+        """读取并校验会话ID到记忆域的映射，非法配置仅告警并忽略。"""
         if isinstance(raw_map, str):
             raw_text = raw_map.strip()
             if not raw_text:
@@ -175,16 +177,11 @@ class PluginContext:
                 try:
                     raw_map = json.loads(raw_text)
                 except Exception:
-                    self.logger.warning(
-                        "conversation_scope_map JSON 解析失败，已忽略并回退为空。"
-                    )
+                    self.logger.warning(f"{field_name} JSON 解析失败，已忽略并回退为空。")
                     raw_map = {}
         if not isinstance(raw_map, dict):
-            self.logger.warning(
-                "conversation_scope_map 配置类型非法（需为 object），已忽略并回退为空。"
-            )
-            self._conversation_scope_map = {}
-            return
+            self.logger.warning(f"{field_name} 配置类型非法（需为 object），已忽略并回退为空。")
+            return {}
 
         validated: Dict[str, str] = {}
         for raw_key, raw_scope in raw_map.items():
@@ -192,33 +189,66 @@ class PluginContext:
             scope_name = str(raw_scope).strip()
 
             if not conversation_id:
-                self.logger.warning(
-                    "conversation_scope_map 存在空会话ID键，已忽略该映射。"
-                )
+                self.logger.warning(f"{field_name} 存在空会话ID键，已忽略该映射。")
                 continue
 
             if not scope_name:
-                self.logger.warning(
-                    f"conversation_scope_map[{conversation_id}] 为空，已忽略该映射。"
-                )
+                self.logger.warning(f"{field_name}[{conversation_id}] 为空，已忽略该映射。")
                 continue
 
             if not self._scope_name_pattern.fullmatch(scope_name):
                 self.logger.warning(
-                    f"conversation_scope_map[{conversation_id}] 的 scope 名非法: {scope_name}，已忽略。"
+                    f"{field_name}[{conversation_id}] 的 scope 名非法: {scope_name}，已忽略。"
                 )
                 continue
 
             validated[conversation_id] = scope_name
 
-        self._conversation_scope_map = validated
+        return validated
+
+    def _refresh_scope_map(self) -> None:
+        """读取记忆域配置：新共享映射优先，旧字段仅作为兼容入口。"""
+        memory_scope_config = self.config.get("memory_scope", {}) or {}
+        if not isinstance(memory_scope_config, dict):
+            self.logger.warning("memory_scope 配置类型非法（需为 object），已回退为默认会话隔离。")
+            memory_scope_config = {}
+
+        self._legacy_public_scope = bool(memory_scope_config.get("legacy_public_scope", False))
+        shared_map = self._parse_scope_map(
+            memory_scope_config.get("shared_scopes", {}) or {},
+            "memory_scope.shared_scopes",
+        )
+        legacy_map = self._parse_scope_map(
+            self.config.get("conversation_scope_map", {}) or {},
+            "conversation_scope_map",
+        )
+
+        self._shared_scope_map = shared_map if shared_map else legacy_map
+        self._conversation_scope_map = self._shared_scope_map.copy()
+        if not shared_map and legacy_map:
+            self.logger.warning(
+                "已兼容读取 conversation_scope_map；建议迁移到 memory_scope.shared_scopes。"
+            )
+
+    def get_shared_scope_map(self) -> Dict[str, str]:
+        """获取已校验的共享记忆域映射。"""
+        return self._shared_scope_map.copy()
 
     def get_conversation_scope_map(self) -> Dict[str, str]:
-        """获取已校验的会话映射。"""
-        return self._conversation_scope_map.copy()
+        """兼容旧调用：返回已校验的共享记忆域映射。"""
+        return self._shared_scope_map.copy()
+
+    @staticmethod
+    def build_private_scope(conversation_id: str) -> str:
+        """根据会话ID生成稳定、合法的私有记忆域名。"""
+        normalized_id = str(conversation_id or "").strip()
+        if not normalized_id:
+            raise ValueError("conversation_id 为空，无法生成私有 memory_scope")
+        digest = hashlib.sha1(normalized_id.encode("utf-8")).hexdigest()[:16]
+        return f"session_{digest}"
 
     def resolve_memory_scope(self, conversation_id: str, persona_name: str = "") -> str:
-        """解析当前记忆域：优先人格名键，其次会话ID键，未命中返回 public。"""
+        """解析当前记忆域：共享映射命中则共享，未命中默认按会话隔离。"""
         scope, _, _ = self.resolve_memory_scope_with_source(
             conversation_id, persona_name=persona_name
         )
@@ -231,15 +261,12 @@ class PluginContext:
         normalized_id = str(conversation_id or "").strip()
         if not normalized_id:
             raise ValueError("conversation_id 为空，无法解析 memory_scope")
-        normalized_persona = str(persona_name or "").strip()
-        if normalized_persona:
-            scope_by_persona = self._conversation_scope_map.get(normalized_persona, "")
-            if scope_by_persona:
-                return scope_by_persona, "persona", normalized_persona
-        scope_by_conversation = self._conversation_scope_map.get(normalized_id, "")
+        scope_by_conversation = self._shared_scope_map.get(normalized_id, "")
         if scope_by_conversation:
-            return scope_by_conversation, "conversation", normalized_id
-        return "public", "default", "public"
+            return scope_by_conversation, "shared_conversation", normalized_id
+        if self._legacy_public_scope:
+            return "public", "legacy_public", "public"
+        return self.build_private_scope(normalized_id), "private_conversation", normalized_id
 
     @staticmethod
     def _normalize_persona_identifier(raw_value: Any) -> str:

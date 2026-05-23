@@ -31,14 +31,49 @@
       }
     }
   },
+  "memory_scope": {
+    "type": "object",
+    "description": "[记忆隔离] 会话窗口与共享记忆域",
+    "hint": "默认按会话窗口隔离记忆。只有在 shared_scopes 中把多个 unified_msg_origin 配到同一个 scope 时，这些会话才会共享记忆。",
+    "items": {
+      "strategy": {
+        "type": "string",
+        "description": "记忆域策略",
+        "default": "per_conversation",
+        "options": [
+          "per_conversation"
+        ],
+        "labels": [
+          "按会话窗口隔离"
+        ],
+        "hint": "当前版本固定为按会话窗口隔离；共享记忆通过 shared_scopes 显式配置。"
+      },
+      "shared_scopes": {
+        "type": "dict",
+        "description": "共享记忆映射（会话ID -> 共享scope）",
+        "default": {},
+        "editor_mode": true,
+        "editor_language": "json",
+        "editor_theme": "vs-dark",
+        "hint": "键填写会话ID（unified_msg_origin），值填写共享记忆域名。示例：{\"aiocqhttp:group:12345\":\"family\",\"aiocqhttp:private:10001\":\"family\"}。未配置的会话会自动使用自己的私有记忆域。scope 名仅允许字母/数字/中文/下划线/短横线。"
+      },
+      "legacy_public_scope": {
+        "type": "bool",
+        "description": "兼容旧版 public 默认域",
+        "default": false,
+        "hint": "关闭时，未命中的会话默认隔离。打开后，未命中的会话会回到旧版 public 公共域。除非需要兼容旧行为，否则建议保持关闭。"
+      }
+    }
+  },
   "conversation_scope_map": {
     "type": "text",
-    "description": "[记忆分类] 文本键到记忆分类域的映射（人格名优先，其次会话ID）",
+    "description": "[Legacy] conversation ID to memory scope map",
     "default": "{}",
     "editor_mode": true,
     "editor_language": "json",
     "editor_theme": "vs-dark",
-    "hint": "JSON格式配置，键可为人格名或会话ID，值为记忆分类域。匹配顺序：先人格名（Persona名），后会话ID（unified_msg_origin）。示例：{\"女友\":\"恋爱\",\"aiocqhttp:group:12345\":\"家人\"}。未命中默认 public。scope 名仅允许字母/数字/中文/下划线/短横线。"
+    "hint": "Legacy field only. Use memory_scope.shared_scopes instead. This version matches conversation IDs only and no longer shares by persona name by default.",
+    "invisible": true
   },
   "injection_method": {
     "type": "string",
