@@ -1,0 +1,570 @@
+"""
+插件上下文 - 包装AstrBot Context并统一管理插件资源
+
+提供统一的资源获取接口，隐藏复杂的依赖关系，
+让下游服务只需要依赖PluginContext即可获得所有必要资源。
+"""
+
+from typing import Any, Dict, Optional, Tuple
+from pathlib import Path
+import re
+import json
+
+try:
+    from astrbot.api import logger, sp
+except ImportError:
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+from ..llm_memory.utils.path_manager import PathManager
+from ..llm_memory.components.embedding_provider import EmbeddingProvider
+
+
+class PluginContext:
+    """
+    插件上下文 - 包装AstrBot Context
+
+    统一管理插件所需的所有资源，包括：
+    - AstrBot Context（包装）
+    - PathManager（路径管理）
+    - 插件配置
+    - 供应商信息
+    """
+
+    def __init__(
+        self, astrbot_context, config: Dict[str, Any], base_data_dir: str = None
+    ):
+        """
+        初始化插件上下文
+
+        Args:
+            astrbot_context: AstrBot的Context对象
+            config: 插件配置字典
+            base_data_dir: 基础数据目录（从main.py传入）
+        """
+        self.astrbot_context = astrbot_context
+        self.config = config or {}
+        self.base_data_dir = base_data_dir
+        self.logger = logger
+
+        # 同步资源
+        self.path_manager: Optional[PathManager] = None
+        # 异步资源，由ComponentFactory创建后设置
+        self.embedding_provider: Optional[EmbeddingProvider] = None
+        self.vector_store: Optional[Any] = None
+        # ComponentFactory 引用，用于获取组件
+        self._component_factory = None
+        self._scope_name_pattern = re.compile(r"^[a-zA-Z0-9\u4e00-\u9fff_-]+$")
+        self._conversation_scope_map: Dict[str, str] = {}
+        self._event_persona_cache: Dict[str, str] = {}
+
+        # 初始化插件资源
+        self._setup_plugin_resources()
+        self._refresh_scope_map()
+
+        self.logger.info(
+            f"PluginContext初始化完成 (提供商: {self.get_embedding_provider_id()})"
+        )
+
+    def _setup_plugin_resources(self):
+        """初始化插件专用资源"""
+        try:
+            # 获取基础数据目录
+            base_data_dir = self._get_base_data_dir()
+
+            # 获取嵌入提供商ID
+            embedding_provider_id = self.get_embedding_provider_id()
+
+            # 创建并配置PathManager
+            self.path_manager = PathManager()
+            self.path_manager.set_provider(embedding_provider_id, base_data_dir)
+
+            self.logger.debug(
+                f"插件资源初始化完成: 提供商={embedding_provider_id}, 数据目录={base_data_dir}"
+            )
+
+        except Exception as e:
+            self.logger.error(f"插件资源初始化失败: {e}")
+            raise
+
+    def _get_base_data_dir(self) -> str:
+        """获取基础数据目录"""
+        # 优先使用传入的数据目录（从main.py获取）
+        if self.base_data_dir:
+            return self.base_data_dir
+
+        # 其次使用配置中的数据目录
+        data_directory = self.config.get("data_directory")
+        if data_directory:
+            return str(data_directory)
+
+        # 没有提供数据目录，抛出异常强制调用方传入
+        raise ValueError(
+            "未提供数据目录！请确保在初始化PluginContext时传入base_data_dir参数，"
+            "或在配置中设置data_directory。数据目录应由外部传入，不应自动推测。"
+        )
+
+    # === AstrBot Context 代理方法 ===
+
+    def get_all_providers(self):
+        """获取所有LLM提供商（代理到AstrBot Context）"""
+        return self.astrbot_context.get_all_providers()
+
+    def get_all_embedding_providers(self):
+        """获取所有嵌入提供商（代理到AstrBot Context）"""
+        if hasattr(self.astrbot_context, "get_all_embedding_providers"):
+            return self.astrbot_context.get_all_embedding_providers()
+        return []
+
+    def get_astrbot_context(self):
+        """获取原始AstrBot Context对象"""
+        return self.astrbot_context
+
+    # === 插件资源获取方法 ===
+
+    def get_path_manager(self) -> PathManager:
+        """获取路径管理器"""
+        return self.path_manager
+
+    def get_embedding_provider_id(self) -> str:
+        """获取嵌入提供商ID"""
+        retrieval = self.config.get("retrieval", {}) or {}
+        if isinstance(retrieval, dict):
+            value = str(retrieval.get("embedding_provider_id", "") or "").strip()
+            if value:
+                return value
+        legacy = str(self.config.get("astrbot_embedding_provider_id", "") or "").strip()
+        return legacy
+
+    def get_enable_local_embedding(self) -> bool:
+        """获取是否启用本地嵌入模型"""
+        legacy_value = bool(self.config.get("enable_local_embedding", False))
+        retrieval = self.config.get("retrieval", {}) or {}
+        if isinstance(retrieval, dict) and "enable_local_embedding" in retrieval:
+            new_value = bool(retrieval.get("enable_local_embedding", False))
+            # 兼容迁移：当 retrieval 仍是默认空配置时，回退旧字段。
+            new_embedding_id = str(retrieval.get("embedding_provider_id", "") or "").strip()
+            new_rerank_id = str(retrieval.get("rerank_provider_id", "") or "").strip()
+            if not new_value and not new_embedding_id and not new_rerank_id and legacy_value:
+                return legacy_value
+            return new_value
+        return legacy_value
+
+    def get_rerank_provider_id(self) -> str:
+        """获取检索重排提供商ID。"""
+        retrieval = self.config.get("retrieval", {}) or {}
+        if isinstance(retrieval, dict):
+            value = str(retrieval.get("rerank_provider_id", "") or "").strip()
+            if value:
+                return value
+        return str(self.config.get("rerank_provider_id", "") or "").strip()
+
+    def get_llm_provider_id(self) -> str:
+        """获取LLM提供商ID"""
+        return self.config.get("provider_id", "")
+
+    def _refresh_scope_map(self) -> None:
+        """读取并校验 conversation_scope_map（非法配置仅告警并忽略）。"""
+        raw_map = self.config.get("conversation_scope_map", {}) or {}
+        if isinstance(raw_map, str):
+            raw_text = raw_map.strip()
+            if not raw_text:
+                raw_map = {}
+            else:
+                try:
+                    raw_map = json.loads(raw_text)
+                except Exception:
+                    self.logger.warning(
+                        "conversation_scope_map JSON 解析失败，已忽略并回退为空。"
+                    )
+                    raw_map = {}
+        if not isinstance(raw_map, dict):
+            self.logger.warning(
+                "conversation_scope_map 配置类型非法（需为 object），已忽略并回退为空。"
+            )
+            self._conversation_scope_map = {}
+            return
+
+        validated: Dict[str, str] = {}
+        for raw_key, raw_scope in raw_map.items():
+            conversation_id = str(raw_key).strip()
+            scope_name = str(raw_scope).strip()
+
+            if not conversation_id:
+                self.logger.warning(
+                    "conversation_scope_map 存在空会话ID键，已忽略该映射。"
+                )
+                continue
+
+            if not scope_name:
+                self.logger.warning(
+                    f"conversation_scope_map[{conversation_id}] 为空，已忽略该映射。"
+                )
+                continue
+
+            if not self._scope_name_pattern.fullmatch(scope_name):
+                self.logger.warning(
+                    f"conversation_scope_map[{conversation_id}] 的 scope 名非法: {scope_name}，已忽略。"
+                )
+                continue
+
+            validated[conversation_id] = scope_name
+
+        self._conversation_scope_map = validated
+
+    def get_conversation_scope_map(self) -> Dict[str, str]:
+        """获取已校验的会话映射。"""
+        return self._conversation_scope_map.copy()
+
+    def resolve_memory_scope(self, conversation_id: str, persona_name: str = "") -> str:
+        """解析当前记忆域：优先人格名键，其次会话ID键，未命中返回 public。"""
+        scope, _, _ = self.resolve_memory_scope_with_source(
+            conversation_id, persona_name=persona_name
+        )
+        return scope
+
+    def resolve_memory_scope_with_source(
+        self, conversation_id: str, persona_name: str = ""
+    ) -> Tuple[str, str, str]:
+        """解析记忆域并返回命中来源：scope, matched_by, matched_key。"""
+        normalized_id = str(conversation_id or "").strip()
+        if not normalized_id:
+            raise ValueError("conversation_id 为空，无法解析 memory_scope")
+        normalized_persona = str(persona_name or "").strip()
+        if normalized_persona:
+            scope_by_persona = self._conversation_scope_map.get(normalized_persona, "")
+            if scope_by_persona:
+                return scope_by_persona, "persona", normalized_persona
+        scope_by_conversation = self._conversation_scope_map.get(normalized_id, "")
+        if scope_by_conversation:
+            return scope_by_conversation, "conversation", normalized_id
+        return "public", "default", "public"
+
+    @staticmethod
+    def _normalize_persona_identifier(raw_value: Any) -> str:
+        """将 persona 返回值规整为可用于 scope_map 匹配的人格名。"""
+        if isinstance(raw_value, dict):
+            value = str(raw_value.get("name", "") or "").strip()
+        else:
+            value = str(raw_value or "").strip()
+        if value == "[%None]":
+            return ""
+        return value
+
+    async def get_event_persona_name(self, event) -> str:
+        """
+        获取当前会话实际生效的人格 ID。
+        参考 LivingMemory 的实现，按 AstrBot 主流程优先级读取：
+        1. sp.session_service_config.persona_id（/persona 等命令写入，最高优先级）
+        2. conversation_manager 当前会话的 conversation.persona_id
+        3. 全局默认人格
+        """
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if not umo:
+            self.logger.info("[睡眠] 跳过人格解析：umo为空 umo=%r", umo)
+            return ""
+        cache_key = f"_angel_event_persona_name:{umo}"
+        cached = getattr(event, cache_key, None)
+        if isinstance(cached, str):
+            return cached
+
+        try:
+            session_config = await sp.get_async(
+                scope="umo",
+                scope_id=umo,
+                key="session_service_config",
+                default={},
+            )
+            if isinstance(session_config, dict):
+                session_persona_id = self._normalize_persona_identifier(
+                    session_config.get("persona_id")
+                )
+                if session_persona_id:
+                    self.logger.info(
+                        "[事件人格] 来源=session_service_config umo=%s persona_id=%s",
+                        umo,
+                        session_persona_id,
+                    )
+                    setattr(event, cache_key, session_persona_id)
+                    return session_persona_id
+        except Exception as e:
+            self.logger.debug(f"读取 session_service_config 人格失败（已忽略）: {e}")
+
+        try:
+            conversation_manager = getattr(self.astrbot_context, "conversation_manager", None)
+            if conversation_manager is not None:
+                session_id = await conversation_manager.get_curr_conversation_id(umo)
+                if session_id is not None:
+                    conversation = await conversation_manager.get_conversation(umo, session_id)
+                    conversation_persona_id = self._normalize_persona_identifier(
+                        getattr(conversation, "persona_id", None) if conversation else None
+                    )
+                    if conversation_persona_id == "[%None]":
+                        self.logger.info(
+                            "[事件人格] 来源=conversation 会话明确无人格 umo=%s session=%s",
+                            umo,
+                            session_id,
+                        )
+                        setattr(event, cache_key, "")
+                        return ""
+                    if conversation_persona_id:
+                        self.logger.info(
+                            "[事件人格] 来源=conversation umo=%s session=%s persona_id=%s",
+                            umo,
+                            session_id,
+                            conversation_persona_id,
+                        )
+                        setattr(event, cache_key, conversation_persona_id)
+                        return conversation_persona_id
+        except Exception as e:
+            self.logger.debug(f"读取 conversation_manager 人格失败（已忽略）: {e}")
+
+        try:
+            persona_manager = getattr(self.astrbot_context, "persona_manager", None)
+            if persona_manager is not None and hasattr(persona_manager, "get_default_persona_v3"):
+                default_persona = await persona_manager.get_default_persona_v3(umo=umo)
+                default_persona_id = self._normalize_persona_identifier(default_persona)
+                if default_persona_id:
+                    self.logger.info(
+                        "[事件人格] 来源=default umo=%s persona_id=%s",
+                        umo,
+                        default_persona_id,
+                    )
+                    setattr(event, cache_key, default_persona_id)
+                    return default_persona_id
+        except Exception as e:
+            self.logger.debug(f"读取默认人格失败（已忽略）: {e}")
+
+        setattr(event, cache_key, "")
+        return ""
+
+    def get_event_conversation_id(self, event) -> str:
+        """从事件中提取统一会话ID。"""
+        if not hasattr(event, "unified_msg_origin"):
+            raise ValueError("事件缺少 unified_msg_origin，无法确定会话ID")
+        raw_conversation_id = getattr(event, "unified_msg_origin")
+        if raw_conversation_id is None:
+            raise ValueError("事件 unified_msg_origin 为空，无法确定会话ID")
+        conversation_id = str(raw_conversation_id).strip()
+        if not conversation_id:
+            raise ValueError("事件 unified_msg_origin 为空，无法确定会话ID")
+        return conversation_id
+
+    async def resolve_memory_scope_from_event(self, event) -> str:
+        """从事件直接解析 memory_scope。"""
+        return self.resolve_memory_scope(
+            self.get_event_conversation_id(event),
+            persona_name=await self.get_event_persona_name(event),
+        )
+
+    def get_config(
+        self,
+        key: Optional[str] = None,
+        default: Any = None,
+        *,
+        umo: Optional[str] = None,
+    ) -> Any:
+        """
+        获取配置值。
+
+        支持两种用法：
+        - get_config("provider_id", "")
+        - get_config(umo="...") -> dict（优先返回会话配置，缺失时回退插件配置）
+        """
+        # 会话配置路径（用于与主链路保持一致）
+        if umo is not None:
+            merged = self.config.copy()
+            getter = None
+            try:
+                getter = getattr(self.astrbot_context, "get_config", None)
+                if callable(getter):
+                    runtime_cfg = getter(umo=umo)
+                    if isinstance(runtime_cfg, dict):
+                        merged.update(runtime_cfg)
+            except Exception:
+                self.logger.debug(
+                    "[睡眠] 获取会话配置失败 getter(umo=%r), getter=%r",
+                    umo,
+                    getattr(getter, "__name__", repr(getter)),
+                    exc_info=True,
+                )
+
+            if key is None:
+                return merged
+            return merged.get(key, default)
+
+        # 兼容旧调用
+        if key is None:
+            return self.config.copy()
+        return self.config.get(key, default)
+
+    def get_all_config(self) -> Dict[str, Any]:
+        """获取所有配置"""
+        return self.config.copy()
+
+    # === 便捷的资源获取方法 ===
+
+    def get_index_dir(self) -> Path:
+        """获取索引目录"""
+        return self.path_manager.get_index_dir()
+
+    def get_tag_db_path(self) -> Path:
+        """获取标签数据库路径"""
+        return self.path_manager.get_tag_db_path()
+
+    def get_file_db_path(self) -> Path:
+        """获取文件数据库路径"""
+        return self.path_manager.get_file_db_path()
+
+    def get_faiss_index_dir(self) -> Path:
+        """获取当前供应商的FAISS索引目录"""
+        return self.path_manager.get_faiss_index_dir()
+
+    def get_memory_center_dir(self) -> Path:
+        """获取中央记忆目录（与provider无关）"""
+        return self.path_manager.get_memory_center_dir()
+
+    def get_simple_memory_db_path(self) -> Path:
+        """获取SimpleMemory数据库路径（与provider无关）"""
+        return self.path_manager.get_simple_memory_db_path()
+
+    def get_current_provider(self) -> str:
+        """获取当前供应商ID"""
+        return self.path_manager.get_current_provider()
+
+    def get_embedding_provider(self) -> Optional[EmbeddingProvider]:
+        """获取由ComponentFactory创建的嵌入提供商实例"""
+        return self.embedding_provider
+
+    def get_vector_store(self) -> Optional[Any]:
+        """获取由ComponentFactory创建的向量索引实例"""
+        return self.vector_store
+
+    def set_embedding_provider(self, provider: EmbeddingProvider):
+        """由ComponentFactory设置嵌入提供商实例"""
+        self.embedding_provider = provider
+
+    def set_vector_store(self, store: Any):
+        """由ComponentFactory设置向量索引实例"""
+        self.vector_store = store
+
+    def set_component_factory(self, component_factory):
+        """设置ComponentFactory引用"""
+        self._component_factory = component_factory
+
+    def get_component(self, component_name: str):
+        """获取ComponentFactory中的组件"""
+        if self._component_factory is None:
+            return None
+        components = self._component_factory.get_components()
+        return components.get(component_name)
+
+    def get_memory_runtime(self):
+        """获取统一记忆运行时组件。"""
+        return self.get_component("memory_runtime")
+
+    # === 验证方法 ===
+
+    def has_embedding_providers(self) -> bool:
+        """检查是否有嵌入提供商"""
+        embedding_providers = self.get_all_embedding_providers()
+        return len(embedding_providers) > 0
+
+    def has_llm_providers(self) -> bool:
+        """检查是否有LLM提供商"""
+        llm_providers = self.get_all_providers()
+        return len(llm_providers) > 0
+
+    def has_providers(self) -> bool:
+        """检查是否有任何提供商"""
+        return self.has_embedding_providers() or self.has_llm_providers()
+
+    # === 更新方法 ===
+
+    def update_config(self, new_config: Dict[str, Any]):
+        """更新配置"""
+        self.config.update(new_config)
+        self._refresh_scope_map()
+        self.logger.debug(f"PluginContext配置已更新: {list(new_config.keys())}")
+
+    def update_from_event(self, event_context):
+        """从事件Context更新（如果需要）"""
+        # 保存原始AstrBot Context
+        self.astrbot_context = event_context
+        self.logger.debug("PluginContext已更新事件Context")
+
+    def __str__(self) -> str:
+        """字符串表示"""
+        return f"PluginContext(provider={self.get_current_provider()}, has_providers={self.has_providers()})"
+
+    def __repr__(self) -> str:
+        """详细表示"""
+        return (
+            f"PluginContext("
+            f"embedding_provider='{self.get_embedding_provider_id()}', "
+            f"llm_provider='{self.get_llm_provider_id()}', "
+            f"has_providers={self.has_providers()}, "
+            f"index_dir='{self.get_index_dir()}')"
+            f")"
+        )
+
+
+class PluginContextFactory:
+    """插件上下文工厂 - 提供统一的Context创建接口"""
+
+    @staticmethod
+    def create_from_initialization(
+        astrbot_context, config: Dict[str, Any], base_data_dir: str = None
+    ) -> PluginContext:
+        """
+        从初始化创建PluginContext
+
+        Args:
+            astrbot_context: AstrBot的Context对象
+            config: 插件配置
+            base_data_dir: 基础数据目录（从main.py传入）
+
+        Returns:
+            PluginContext实例
+        """
+        return PluginContext(astrbot_context, config, base_data_dir)
+
+    @staticmethod
+    def create_from_event(event, base_config: Dict[str, Any]) -> PluginContext:
+        """
+        从事件创建PluginContext
+
+        Args:
+            event: AstrBot事件对象
+            base_config: 基础配置
+
+        Returns:
+            PluginContext实例
+        """
+        return PluginContext(event.context, base_config)
+
+    @staticmethod
+    def create_mock_context(config: Dict[str, Any] = None) -> PluginContext:
+        """
+        创建模拟的PluginContext（用于测试）
+
+        Args:
+            config: 模拟配置
+
+        Returns:
+            模拟的PluginContext实例
+        """
+        if config is None:
+            config = {"astrbot_embedding_provider_id": "test", "provider_id": "test"}
+
+        # 创建模拟的AstrBot Context
+        class MockAstrbotContext:
+            def get_all_providers(self):
+                return []
+
+            def get_all_embedding_providers(self):
+                return []
+
+        mock_context = MockAstrbotContext()
+        return PluginContext(mock_context, config)
