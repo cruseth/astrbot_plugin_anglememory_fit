@@ -1,0 +1,2 @@
+# astrbot_plugin_anglememory_fit
+修改的天使之魂插件
