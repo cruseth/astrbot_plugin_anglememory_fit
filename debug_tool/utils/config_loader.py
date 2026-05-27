@@ -17,7 +17,7 @@ class ConfigLoader:
             self.base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     def get_config_path(self) -> str:
-        # data/plugins/astrbot_plugin_angel_memory/debug_tool -> data/cmd_config.json
+        # data/plugins/astrbot_plugin_angel_memory_edit/debug_tool -> data/cmd_config.json
         # ../../../cmd_config.json
         return os.path.abspath(os.path.join(self.base_path, "../../../cmd_config.json"))
 
@@ -34,7 +34,7 @@ class ConfigLoader:
         plugin_config_path = os.path.abspath(
             os.path.join(
                 self.base_path,
-                "../../../config/astrbot_plugin_angel_memory_config.json",
+                "../../../config/astrbot_plugin_angel_memory_edit_config.json",
             )
         )
         plugin_config = {}
@@ -81,7 +81,7 @@ class ConfigLoader:
         plugin_config_path = os.path.abspath(
             os.path.join(
                 self.base_path,
-                "../../../config/astrbot_plugin_angel_memory_config.json",
+                "../../../config/astrbot_plugin_angel_memory_edit_config.json",
             )
         )
         plugin_config = {}
@@ -134,16 +134,16 @@ class ConfigLoader:
         }
 
     def get_data_dir(self, provider_id: str) -> str:
-        # data/plugins/astrbot_plugin_angel_memory/debug_tool -> data/plugin_data/astrbot_plugin_angel_memory
-        # ../../../plugin_data/astrbot_plugin_angel_memory
-        base_data_dir = os.path.abspath(os.path.join(self.base_path, "../../../plugin_data/astrbot_plugin_angel_memory"))
+        # data/plugins/astrbot_plugin_angel_memory_edit/debug_tool -> data/plugin_data/astrbot_plugin_angel_memory_edit
+        # ../../../plugin_data/astrbot_plugin_angel_memory_edit
+        base_data_dir = os.path.abspath(os.path.join(self.base_path, "../../../plugin_data/astrbot_plugin_angel_memory_edit"))
         # 主插件 path_manager 用正则替换所有 Windows 非法字符，debug_tool 须完全对齐
         provider_id = re.sub(r'[<>:"/\\|?*]', "_", provider_id.strip())
         return os.path.join(base_data_dir, f"memory_{provider_id}", "index", "faiss")
 
     def get_plugin_data_dir(self) -> str:
         return os.path.abspath(
-            os.path.join(self.base_path, "../../../plugin_data/astrbot_plugin_angel_memory")
+            os.path.join(self.base_path, "../../../plugin_data/astrbot_plugin_angel_memory_edit")
         )
 
     def get_memory_center_dir(self) -> str:
@@ -162,6 +162,6 @@ class ConfigLoader:
         return os.path.join(self.get_memory_center_dir(), "backups")
 
     def get_raw_notes_dir(self) -> str:
-        # data/plugins/astrbot_plugin_angel_memory/debug_tool -> data/plugin_data/astrbot_plugin_angel_memory/raw
-        base_data_dir = os.path.abspath(os.path.join(self.base_path, "../../../plugin_data/astrbot_plugin_angel_memory"))
+        # data/plugins/astrbot_plugin_angel_memory_edit/debug_tool -> data/plugin_data/astrbot_plugin_angel_memory_edit/raw
+        base_data_dir = os.path.abspath(os.path.join(self.base_path, "../../../plugin_data/astrbot_plugin_angel_memory_edit"))
         return os.path.join(base_data_dir, "raw")

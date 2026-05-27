@@ -79,12 +79,12 @@
 
 2. **安装Angel Memory插件**
    ```bash
-   git clone https://github.com/kawayiYokami/astrbot_plugin_angel_memory.git
+   git clone https://github.com/cruseth/astrbot_plugin_anglememory_fit.git
    ```
 
 3. **安装依赖**
    ```bash
-   cd astrbot_plugin_angel_memory
+   cd astrbot_plugin_angel_memory_edit
    pip install -r requirements.txt
    ```
 
@@ -434,8 +434,8 @@ memory_behavior:
 
 ```bash
 # 克隆项目
-git clone https://github.com/kawayiYokami/astrbot_plugin_angel_memory.git
-cd astrbot_plugin_angel_memory
+git clone https://github.com/cruseth/astrbot_plugin_anglememory_fit.git
+cd astrbot_plugin_angel_memory_edit
 
 # 安装依赖
 pip install -r requirements.txt

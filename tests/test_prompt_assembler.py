@@ -27,7 +27,7 @@ def _install_astrbot_stubs() -> None:
 
 _install_astrbot_stubs()
 
-PACKAGE_NAME = "astrbot_plugin_angel_memory"
+PACKAGE_NAME = "astrbot_plugin_angel_memory_edit"
 if PACKAGE_NAME not in sys.modules:
     package = types.ModuleType(PACKAGE_NAME)
     package.__path__ = [str(Path(__file__).resolve().parents[1])]
@@ -51,7 +51,7 @@ if LLM_MEMORY_UTILS_PACKAGE not in sys.modules:
     package.__path__ = [str(Path(__file__).resolve().parents[1] / "llm_memory" / "utils")]
     sys.modules[LLM_MEMORY_UTILS_PACKAGE] = package
 
-from astrbot_plugin_angel_memory.llm_memory.prompts.prompt_assembler import PromptAssembler
+from astrbot_plugin_angel_memory_edit.llm_memory.prompts.prompt_assembler import PromptAssembler
 
 
 def test_prompt_assembler_contains_critical_sections():

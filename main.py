@@ -49,11 +49,11 @@ def configure_logging_behavior():
 
 
 @register(
-    "astrbot_plugin_angel_memory",
-    "kawayiYokami",
+    "astrbot_plugin_angel_memory_edit",
+    "cruseth",
     "天使的记忆，让astrbot拥有记忆维护系统和开箱即用的知识库检索",
-    "1.3.37",
-    "https://github.com/kawayiYokami/astrbot_plugin_angel_memory"
+    "1.3.39",
+    "https://github.com/cruseth/astrbot_plugin_anglememory_fit"
 )
 class AngelMemoryPlugin(Star):
     """天使记忆插件主类
@@ -79,7 +79,7 @@ class AngelMemoryPlugin(Star):
         self.logger = logger
 
         # 1. 获取插件数据目录（在main.py中获取）
-        data_dir = StarTools.get_data_dir("astrbot_plugin_angel_memory")
+        data_dir = StarTools.get_data_dir("astrbot_plugin_angel_memory_edit")
         self.logger.info(f"获取到插件数据目录: {data_dir}")
 
         # 2. 创建统一的PluginContext，包含所有必要资源

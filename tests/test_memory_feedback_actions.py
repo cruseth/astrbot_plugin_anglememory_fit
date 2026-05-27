@@ -29,7 +29,7 @@ def _install_astrbot_stubs() -> None:
 
 _install_astrbot_stubs()
 
-PACKAGE_NAME = "astrbot_plugin_angel_memory"
+PACKAGE_NAME = "astrbot_plugin_angel_memory_edit"
 if PACKAGE_NAME not in sys.modules:
     package = types.ModuleType(PACKAGE_NAME)
     package.__path__ = [str(Path(__file__).resolve().parents[1])]
@@ -71,10 +71,10 @@ if LLM_MEMORY_COMPONENTS_PACKAGE not in sys.modules:
     package.__path__ = [str(Path(__file__).resolve().parents[1] / "llm_memory" / "components")]
     sys.modules[LLM_MEMORY_COMPONENTS_PACKAGE] = package
 
-from astrbot_plugin_angel_memory.core.utils.memory_id_resolver import MemoryIDResolver
-from astrbot_plugin_angel_memory.llm_memory.components.memory_sql_manager import MemorySqlManager
-from astrbot_plugin_angel_memory.llm_memory.models.data_models import BaseMemory, MemoryType
-from astrbot_plugin_angel_memory.llm_memory.service.memory_manager import MemoryManager
+from astrbot_plugin_angel_memory_edit.core.utils.memory_id_resolver import MemoryIDResolver
+from astrbot_plugin_angel_memory_edit.llm_memory.components.memory_sql_manager import MemorySqlManager
+from astrbot_plugin_angel_memory_edit.llm_memory.models.data_models import BaseMemory, MemoryType
+from astrbot_plugin_angel_memory_edit.llm_memory.service.memory_manager import MemoryManager
 
 
 class _FakeCollection:

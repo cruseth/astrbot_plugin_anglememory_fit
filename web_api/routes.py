@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from astrbot.api.star import Context
 
-PLUGIN_NAME = "astrbot_plugin_angel_memory"
+PLUGIN_NAME = "astrbot_plugin_angel_memory_edit"
 
 
 def register_all_routes(context: "Context", plugin_context) -> None:

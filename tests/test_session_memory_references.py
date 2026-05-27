@@ -54,21 +54,21 @@ def _install_astrbot_stubs() -> None:
 
 _install_astrbot_stubs()
 
-PACKAGE_NAME = "astrbot_plugin_angel_memory"
+PACKAGE_NAME = "astrbot_plugin_angel_memory_edit"
 if PACKAGE_NAME not in sys.modules:
     package = types.ModuleType(PACKAGE_NAME)
     package.__path__ = [str(Path(__file__).resolve().parents[1])]
     sys.modules[PACKAGE_NAME] = package
 
-from astrbot_plugin_angel_memory.core.services.injection_service import (
+from astrbot_plugin_angel_memory_edit.core.services.injection_service import (
     DeepMindInjectionService,
 )
-from astrbot_plugin_angel_memory.core.memory_runtime.simple_memory_runtime import (
+from astrbot_plugin_angel_memory_edit.core.memory_runtime.simple_memory_runtime import (
     SimpleMemoryRuntime,
 )
-from astrbot_plugin_angel_memory.core.session_memory import SessionMemoryManager
-from astrbot_plugin_angel_memory.core.utils.memory_injector import MemoryInjector
-from astrbot_plugin_angel_memory.llm_memory.models.data_models import (
+from astrbot_plugin_angel_memory_edit.core.session_memory import SessionMemoryManager
+from astrbot_plugin_angel_memory_edit.core.utils.memory_injector import MemoryInjector
+from astrbot_plugin_angel_memory_edit.llm_memory.models.data_models import (
     BaseMemory,
     MemoryType,
 )

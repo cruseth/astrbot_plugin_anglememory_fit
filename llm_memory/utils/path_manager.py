@@ -44,7 +44,7 @@ class PathManager:
         if cls._project_root is None:
             # 从当前文件位置向上查找插件根目录
             current_dir = Path(__file__).parent
-            # llm_memory/utils -> llm_memory -> astrbot_plugin_angel_memory
+            # llm_memory/utils -> llm_memory -> astrbot_plugin_angel_memory_edit
             cls._project_root = current_dir.parent.parent
         return cls._project_root
 

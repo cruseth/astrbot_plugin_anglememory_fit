@@ -49,15 +49,15 @@ def _install_astrbot_stubs() -> None:
 
 _install_astrbot_stubs()
 
-PACKAGE_NAME = "astrbot_plugin_angel_memory"
+PACKAGE_NAME = "astrbot_plugin_angel_memory_edit"
 if PACKAGE_NAME not in sys.modules:
     package = types.ModuleType(PACKAGE_NAME)
     package.__path__ = [str(Path(__file__).resolve().parents[1])]
     sys.modules[PACKAGE_NAME] = package
 
-from astrbot_plugin_angel_memory.core.services.user_profile_service import UserProfileService
-from astrbot_plugin_angel_memory.llm_memory.models.data_models import BaseMemory, MemoryType
-from astrbot_plugin_angel_memory.llm_memory.utils.user_profile import is_user_profile_tags
+from astrbot_plugin_angel_memory_edit.core.services.user_profile_service import UserProfileService
+from astrbot_plugin_angel_memory_edit.llm_memory.models.data_models import BaseMemory, MemoryType
+from astrbot_plugin_angel_memory_edit.llm_memory.utils.user_profile import is_user_profile_tags
 
 
 def _memory(memory_id: str, judgment: str, tags: list[str]) -> BaseMemory:

@@ -199,6 +199,9 @@ class MemoryConfig:
             self._enable_local_embedding = (
                 new_local_embedding if "enable_local_embedding" in retrieval else legacy_local_embedding
             )
+        self._memory_scope = config_get("memory_scope", {}) or {}
+        if not isinstance(self._memory_scope, dict):
+            self._memory_scope = {}
         self._conversation_scope_map = config_get("conversation_scope_map", {}) or {}
 
         # 灵魂系统配置 - 支持新旧格式兼容
@@ -361,6 +364,11 @@ class MemoryConfig:
         return self._conversation_scope_map
 
     @property
+    def memory_scope(self) -> Dict[str, Any]:
+        """记忆域隔离配置（原始值，校验由 PluginContext 负责）。"""
+        return self._memory_scope
+
+    @property
     def enable_soul_system(self) -> bool:
         """是否启用灵魂系统"""
         return self._enable_soul_system
@@ -415,6 +423,7 @@ class MemoryConfig:
             "sleep_interval": self.sleep_interval,
             "default_passive_strength": self.default_passive_strength,
             "enable_local_embedding": self.enable_local_embedding,
+            "memory_scope": self.memory_scope,
             "conversation_scope_map": self.conversation_scope_map,
             "enable_soul_system": self.enable_soul_system,
             "data_directory": self.data_directory,

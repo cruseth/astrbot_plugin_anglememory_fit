@@ -61,7 +61,7 @@ export function useBridge() {
       return (await bridge.apiGet(endpoint, params)) as T
     }
     // 开发模式回退：直接请求本地代理
-    const url = new URL(`/api/plug/astrbot_plugin_angel_memory/${endpoint}`, window.location.origin)
+    const url = new URL(`/api/plug/astrbot_plugin_angel_memory_edit/${endpoint}`, window.location.origin)
     if (params) {
       Object.entries(params).forEach(([k, v]) => {
         if (v !== undefined && v !== null) url.searchParams.set(k, String(v))
@@ -75,7 +75,7 @@ export function useBridge() {
     if (bridge) {
       return (await bridge.apiPost(endpoint, body)) as T
     }
-    const url = `/api/plug/astrbot_plugin_angel_memory/${endpoint}`
+    const url = `/api/plug/astrbot_plugin_angel_memory_edit/${endpoint}`
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -88,7 +88,7 @@ export function useBridge() {
     if (bridge) {
       return (await bridge.upload(endpoint, file)) as T
     }
-    const url = `/api/plug/astrbot_plugin_angel_memory/${endpoint}`
+    const url = `/api/plug/astrbot_plugin_angel_memory_edit/${endpoint}`
     const formData = new FormData()
     formData.append('file', file)
     const resp = await fetch(url, { method: 'POST', body: formData })
@@ -100,7 +100,7 @@ export function useBridge() {
       await bridge.download(endpoint, params, filename)
       return
     }
-    const url = new URL(`/api/plug/astrbot_plugin_angel_memory/${endpoint}`, window.location.origin)
+    const url = new URL(`/api/plug/astrbot_plugin_angel_memory_edit/${endpoint}`, window.location.origin)
     if (params) {
       Object.entries(params).forEach(([k, v]) => {
         if (v !== undefined && v !== null) url.searchParams.set(k, String(v))
