@@ -4,7 +4,7 @@
 负责构建用于小模型的记忆整理提示词。
 """
 
-from typing import List, Dict, Tuple
+from typing import Iterable, List, Dict, Tuple
 from datetime import datetime
 from ..session_memory import MemoryItem
 from ..config import MemoryConstants
@@ -59,7 +59,10 @@ class SmallModelPromptBuilder:
         return ""
 
     @staticmethod
-    def format_chat_records(chat_records: List[Dict]) -> Tuple[str, List[Dict]]:
+    def format_chat_records(
+        chat_records: List[Dict],
+        excluded_sender_ids: Iterable[str] | None = None,
+    ) -> Tuple[str, List[Dict]]:
         """
         格式化对话历史为可读文本，并生成对话参与者清单。
 
@@ -73,6 +76,11 @@ class SmallModelPromptBuilder:
         """
         formatted_lines = []
         participants = {}  # 使用字典去重，key为sender_id
+        excluded = {
+            str(sender_id or "").strip()
+            for sender_id in (excluded_sender_ids or [])
+            if str(sender_id or "").strip()
+        }
 
         for msg in chat_records:
             role = msg.get("role")
@@ -90,7 +98,9 @@ class SmallModelPromptBuilder:
 
             if role == "user":
                 sender_name = msg.get("sender_name", "成员")
-                sender_id = msg.get("sender_id", "Unknown")
+                sender_id = str(msg.get("sender_id", "Unknown") or "").strip()
+                if sender_id in excluded:
+                    continue
 
                 # 构建参与者清单
                 if sender_id != "Unknown" and sender_id not in participants:

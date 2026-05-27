@@ -32,10 +32,12 @@ class UserProfileService:
     def extract_current_user_ids(
         chat_records: Sequence[Dict[str, Any]] | None,
         fallback_sender_id: str = "",
+        excluded_user_ids: Iterable[str] | None = None,
     ) -> List[str]:
         user_ids, _ = UserProfileService.extract_current_users(
             chat_records=chat_records,
             fallback_sender_id=fallback_sender_id,
+            excluded_user_ids=excluded_user_ids,
         )
         return user_ids
 
@@ -44,10 +46,16 @@ class UserProfileService:
         chat_records: Sequence[Dict[str, Any]] | None,
         fallback_sender_id: str = "",
         fallback_sender_name: str = "",
+        excluded_user_ids: Iterable[str] | None = None,
     ) -> Tuple[List[str], Dict[str, str]]:
         seen = set()
         user_ids: List[str] = []
         user_names: Dict[str, str] = {}
+        excluded = {
+            str(user_id or "").strip()
+            for user_id in (excluded_user_ids or [])
+            if str(user_id or "").strip()
+        }
 
         for msg in chat_records or []:
             if not isinstance(msg, dict):
@@ -56,6 +64,8 @@ class UserProfileService:
             if role != "user":
                 continue
             sender_id = str(msg.get("sender_id", "") or "").strip()
+            if sender_id in excluded:
+                continue
             if not UserProfileService._is_valid_user_id(sender_id):
                 continue
             sender_name = str(msg.get("sender_name", "") or "").strip()
@@ -66,7 +76,11 @@ class UserProfileService:
                 user_names[sender_id] = sender_name
 
         fallback = str(fallback_sender_id or "").strip()
-        if not user_ids and UserProfileService._is_valid_user_id(fallback):
+        if (
+            not user_ids
+            and fallback not in excluded
+            and UserProfileService._is_valid_user_id(fallback)
+        ):
             user_ids.append(fallback)
             fallback_name = str(fallback_sender_name or "").strip()
             if fallback_name:
@@ -88,6 +102,7 @@ class UserProfileService:
         fallback_sender_id: str = "",
         fallback_sender_name: str = "",
         memory_scope: str = "public",
+        excluded_user_ids: Iterable[str] | None = None,
     ) -> List[BaseMemory]:
         sid = str(session_id or "").strip()
         if not sid:
@@ -97,6 +112,7 @@ class UserProfileService:
             chat_records=chat_records,
             fallback_sender_id=fallback_sender_id,
             fallback_sender_name=fallback_sender_name,
+            excluded_user_ids=excluded_user_ids,
         )
         self._session_user_ids[sid] = user_ids
         self._session_user_names[sid] = user_names

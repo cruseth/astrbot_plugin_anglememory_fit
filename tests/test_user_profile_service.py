@@ -56,6 +56,7 @@ if PACKAGE_NAME not in sys.modules:
     sys.modules[PACKAGE_NAME] = package
 
 from astrbot_plugin_angel_memory_edit.core.services.user_profile_service import UserProfileService
+from astrbot_plugin_angel_memory_edit.core.utils.small_model_prompt_builder import SmallModelPromptBuilder
 from astrbot_plugin_angel_memory_edit.llm_memory.models.data_models import BaseMemory, MemoryType
 from astrbot_plugin_angel_memory_edit.llm_memory.utils.user_profile import is_user_profile_tags
 
@@ -94,6 +95,35 @@ def test_extract_current_user_ids_deduplicates_latest_batch():
     user_ids, user_names = UserProfileService.extract_current_users(records)
     assert user_ids == ["123456", "654321"]
     assert user_names == {"123456": "明仔", "654321": "小红"}
+
+
+def test_extract_current_users_excludes_bot_self_id_and_uses_fallback_user():
+    records = [
+        {"role": "user", "sender_id": "999999", "sender_name": "Bot", "content": "bot echo"},
+    ]
+
+    user_ids, user_names = UserProfileService.extract_current_users(
+        records,
+        fallback_sender_id="123456",
+        fallback_sender_name="Alice",
+        excluded_user_ids={"999999"},
+    )
+
+    assert user_ids == ["123456"]
+    assert user_names == {"123456": "Alice"}
+
+
+def test_format_chat_records_excludes_bot_from_participants():
+    query, users = SmallModelPromptBuilder.format_chat_records(
+        [
+            {"role": "user", "sender_id": "999999", "sender_name": "Bot", "content": "ignored"},
+            {"role": "user", "sender_id": "123456", "sender_name": "Alice", "content": "hello"},
+        ],
+        excluded_sender_ids={"999999"},
+    )
+
+    assert "999999" not in query
+    assert users == [{"id": "123456", "name": "Alice"}]
 
 
 def test_format_profiles_includes_reasoning_and_filters_regular_duplicates():

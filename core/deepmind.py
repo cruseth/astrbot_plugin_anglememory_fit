@@ -317,6 +317,8 @@ class DeepMind:
         event.plugin_context = self.plugin_context
 
         session_id = self._get_session_id(event)
+        current_sender_id, current_sender_name = self._get_event_sender_identity(event)
+        bot_user_ids = self._get_event_bot_user_ids(event)
 
         # 1. 从 event.angelheart_context 中获取对话历史（仅保留未处理消息）
         chat_records: List[Dict[str, Any]] = []
@@ -333,6 +335,12 @@ class DeepMind:
                     for msg in chat_records
                     if isinstance(msg, dict) and msg.get("is_processed", True) is False
                 ]
+                unprocessed_chat_records = self._normalize_user_chat_records(
+                    unprocessed_chat_records,
+                    current_sender_id=current_sender_id,
+                    current_sender_name=current_sender_name,
+                    bot_user_ids=bot_user_ids,
+                )
                 secretary_decision = angelheart_data.get("secretary_decision", {}) or {}
             except (json.JSONDecodeError, KeyError, TypeError):
                 self.logger.error(f"为会话 {session_id} 解析 angelheart_context 失败")
@@ -364,9 +372,22 @@ class DeepMind:
             # 降级到原始逻辑
             if not unprocessed_chat_records:
                 message_text = self._extract_message_text(event)
-                query = message_text if message_text else ""
+                if message_text:
+                    unprocessed_chat_records = [
+                        self._build_user_chat_record(
+                            content=message_text,
+                            sender_id=current_sender_id,
+                            sender_name=current_sender_name,
+                            timestamp=time.time(),
+                        )
+                    ]
+            if unprocessed_chat_records:
+                query, user_list = self.prompt_builder.format_chat_records(
+                    unprocessed_chat_records,
+                    excluded_sender_ids=bot_user_ids,
+                )
             else:
-                query, user_list = self.prompt_builder.format_chat_records(unprocessed_chat_records)
+                query = ""
 
         # 3. 如果未配置 provider_id，跳过记忆整理
         if not self.provider_id:
@@ -424,9 +445,10 @@ class DeepMind:
             await self.user_profile_service.refresh_session_profiles(
                 session_id=session_id,
                 chat_records=unprocessed_chat_records,
-                fallback_sender_id=str(getattr(event, "sender_id", "") or ""),
-                fallback_sender_name=str(getattr(event, "sender_name", "") or ""),
+                fallback_sender_id=current_sender_id,
+                fallback_sender_name=current_sender_name,
                 memory_scope=memory_scope,
+                excluded_user_ids=bot_user_ids,
             )
         except Exception as e:
             elapsed_ms = int((time.time() - profile_refresh_started_at) * 1000)
@@ -500,6 +522,141 @@ class DeepMind:
                 "事件中缺少 'event.unified_msg_origin' 属性，无法确定会话ID！"
             )
             raise
+
+    @staticmethod
+    def _append_unique(values: List[str], value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text not in values:
+            values.append(text)
+
+    def _get_event_bot_user_ids(self, event: AstrMessageEvent) -> List[str]:
+        """Collect known bot account IDs so they are never treated as users."""
+        ids: List[str] = []
+        for attr_name in ("self_id", "bot_id"):
+            self._append_unique(ids, getattr(event, attr_name, ""))
+
+        getter = getattr(event, "get_self_id", None)
+        if callable(getter):
+            try:
+                self._append_unique(ids, getter())
+            except Exception:
+                pass
+
+        message_obj = getattr(event, "message_obj", None)
+        if message_obj is not None:
+            for attr_name in ("self_id", "bot_id"):
+                self._append_unique(ids, getattr(message_obj, attr_name, ""))
+
+        return ids
+
+    @staticmethod
+    def _extract_member_identity(member: Any) -> tuple[str, str]:
+        if member is None:
+            return "", ""
+        user_id = ""
+        nickname = ""
+        for attr_name in ("user_id", "sender_id", "id", "uin"):
+            user_id = str(getattr(member, attr_name, "") or "").strip()
+            if user_id:
+                break
+        for attr_name in ("nickname", "name", "card", "display_name"):
+            nickname = str(getattr(member, attr_name, "") or "").strip()
+            if nickname:
+                break
+        return user_id, nickname
+
+    def _get_event_sender_identity(self, event: AstrMessageEvent) -> tuple[str, str]:
+        """Resolve the real human sender from AstrBot event APIs and message_obj."""
+        bot_ids = set(self._get_event_bot_user_ids(event))
+        candidates: List[tuple[str, str]] = []
+
+        getter = getattr(event, "get_sender_id", None)
+        if callable(getter):
+            try:
+                candidates.append((str(getter() or "").strip(), ""))
+            except Exception:
+                pass
+
+        message_obj = getattr(event, "message_obj", None)
+        if message_obj is not None:
+            candidates.append(self._extract_member_identity(getattr(message_obj, "sender", None)))
+
+        candidates.append(
+            (
+                str(getattr(event, "sender_id", "") or "").strip(),
+                str(getattr(event, "sender_name", "") or "").strip(),
+            )
+        )
+
+        selected_id = ""
+        selected_name = ""
+        for sender_id, sender_name in candidates:
+            if sender_id and sender_id not in bot_ids:
+                selected_id = sender_id
+                selected_name = sender_name
+                break
+        if not selected_id:
+            for sender_id, sender_name in candidates:
+                if sender_id:
+                    selected_id = sender_id
+                    selected_name = sender_name
+                    break
+
+        if not selected_name:
+            name_getter = getattr(event, "get_sender_name", None)
+            if callable(name_getter):
+                try:
+                    selected_name = str(name_getter() or "").strip()
+                except Exception:
+                    selected_name = ""
+        if not selected_name and message_obj is not None:
+            _, selected_name = self._extract_member_identity(getattr(message_obj, "sender", None))
+        if not selected_name:
+            selected_name = str(getattr(event, "sender_name", "") or "").strip()
+
+        return selected_id or "user", selected_name or "用户"
+
+    @staticmethod
+    def _build_user_chat_record(
+        content: Any,
+        sender_id: str,
+        sender_name: str,
+        timestamp: float,
+        is_processed: bool = False,
+    ) -> Dict[str, Any]:
+        return {
+            "role": "user",
+            "content": content,
+            "sender_id": str(sender_id or "").strip() or "user",
+            "sender_name": str(sender_name or "").strip() or "用户",
+            "timestamp": float(timestamp or time.time()),
+            "is_processed": is_processed,
+            "is_structured_toolcall": False,
+        }
+
+    def _normalize_user_chat_records(
+        self,
+        records: List[Dict[str, Any]],
+        *,
+        current_sender_id: str,
+        current_sender_name: str,
+        bot_user_ids: List[str],
+    ) -> List[Dict[str, Any]]:
+        bot_ids = {str(user_id or "").strip() for user_id in bot_user_ids if str(user_id or "").strip()}
+        normalized: List[Dict[str, Any]] = []
+        for msg in records or []:
+            if not isinstance(msg, dict):
+                continue
+            item = dict(msg)
+            if str(item.get("role", "") or "").strip() == "user":
+                sender_id = str(item.get("sender_id", "") or "").strip()
+                if not sender_id or sender_id in bot_ids:
+                    item["sender_id"] = current_sender_id
+                    item["sender_name"] = current_sender_name
+                elif not str(item.get("sender_name", "") or "").strip():
+                    item["sender_name"] = current_sender_name
+            normalized.append(item)
+        return normalized
 
     def _memories_to_json(self, memories: List) -> List[Dict[str, Any]]:
         """
@@ -639,6 +796,8 @@ class DeepMind:
             if response is not None
             else ""
         )
+        current_sender_id, current_sender_name = self._get_event_sender_identity(event)
+        bot_user_ids = self._get_event_bot_user_ids(event)
 
         # 分支1：AngelHeart 提供完整 chat_records
         if hasattr(event, "angelheart_context") and getattr(event, "angelheart_context", None):
@@ -667,6 +826,12 @@ class DeepMind:
                         f"[反思调度] 使用天使之心聊天记录: processed={len(processed)} "
                         f"+ latest_unprocessed_user={1 if latest_user_unprocessed else 0}"
                     )
+                    combined = self._normalize_user_chat_records(
+                        combined,
+                        current_sender_id=current_sender_id,
+                        current_sender_name=current_sender_name,
+                        bot_user_ids=bot_user_ids,
+                    )
                     return self._dedupe_and_sort_chat_records(combined)
             except (json.JSONDecodeError, TypeError, KeyError) as e:
                 self.logger.warning(f"反思聊天记录解析失败，降级到原生分支: {e}")
@@ -676,15 +841,12 @@ class DeepMind:
         records: List[Dict[str, Any]] = []
         if user_text.strip():
             records.append(
-                {
-                    "role": "user",
-                    "content": user_text,
-                    "sender_id": str(getattr(event, "sender_id", "") or "user"),
-                    "sender_name": str(getattr(event, "sender_name", "") or "用户"),
-                    "timestamp": float(now_ts),
-                    "is_processed": False,
-                    "is_structured_toolcall": False,
-                }
+                self._build_user_chat_record(
+                    content=user_text,
+                    sender_id=current_sender_id,
+                    sender_name=current_sender_name,
+                    timestamp=now_ts,
+                )
             )
         if str(response_text).strip():
             records.append(
@@ -875,7 +1037,7 @@ class DeepMind:
         historical_chat_text = ""
         try:
             historical_chat_text, _ = self.prompt_builder.format_chat_records(
-                payload.get("historical_chat_records", [])
+                payload.get("historical_chat_records", []),
             )
         except Exception as e:
             self.logger.warning(f"格式化反思聊天记录失败，降级为空: {e}")
@@ -951,7 +1113,7 @@ class DeepMind:
                 historical_chat_text = str(historical_chat_text_override).strip()
             elif isinstance(raw_chat_records, list) and raw_chat_records:
                 historical_chat_text, _ = self.prompt_builder.format_chat_records(
-                    raw_chat_records
+                    raw_chat_records,
                 )
             if not historical_chat_text.strip():
                 historical_chat_text = query
