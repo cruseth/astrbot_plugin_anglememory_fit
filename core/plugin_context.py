@@ -9,10 +9,9 @@ from typing import Any, Dict, Optional, Tuple
 from pathlib import Path
 import re
 import json
-import hashlib
 
 try:
-    from astrbot.api import logger, sp
+    from astrbot.api import logger
 except ImportError:
     import logging
 
@@ -58,9 +57,6 @@ class PluginContext:
         self._component_factory = None
         self._scope_name_pattern = re.compile(r"^[a-zA-Z0-9\u4e00-\u9fff_-]+$")
         self._conversation_scope_map: Dict[str, str] = {}
-        self._shared_scope_map: Dict[str, str] = {}
-        self._legacy_public_scope: bool = False
-        self._event_persona_cache: Dict[str, str] = {}
 
         # 初始化插件资源
         self._setup_plugin_resources()
@@ -167,8 +163,9 @@ class PluginContext:
         """获取LLM提供商ID"""
         return self.config.get("provider_id", "")
 
-    def _parse_scope_map(self, raw_map: Any, field_name: str) -> Dict[str, str]:
-        """读取并校验会话ID到记忆域的映射，非法配置仅告警并忽略。"""
+    def _refresh_scope_map(self) -> None:
+        """读取并校验 conversation_scope_map（非法配置仅告警并忽略）。"""
+        raw_map = self.config.get("conversation_scope_map", {}) or {}
         if isinstance(raw_map, str):
             raw_text = raw_map.strip()
             if not raw_text:
@@ -177,11 +174,16 @@ class PluginContext:
                 try:
                     raw_map = json.loads(raw_text)
                 except Exception:
-                    self.logger.warning(f"{field_name} JSON 解析失败，已忽略并回退为空。")
+                    self.logger.warning(
+                        "conversation_scope_map JSON 解析失败，已忽略并回退为空。"
+                    )
                     raw_map = {}
         if not isinstance(raw_map, dict):
-            self.logger.warning(f"{field_name} 配置类型非法（需为 object），已忽略并回退为空。")
-            return {}
+            self.logger.warning(
+                "conversation_scope_map 配置类型非法（需为 object），已忽略并回退为空。"
+            )
+            self._conversation_scope_map = {}
+            return
 
         validated: Dict[str, str] = {}
         for raw_key, raw_scope in raw_map.items():
@@ -189,66 +191,33 @@ class PluginContext:
             scope_name = str(raw_scope).strip()
 
             if not conversation_id:
-                self.logger.warning(f"{field_name} 存在空会话ID键，已忽略该映射。")
+                self.logger.warning(
+                    "conversation_scope_map 存在空会话ID键，已忽略该映射。"
+                )
                 continue
 
             if not scope_name:
-                self.logger.warning(f"{field_name}[{conversation_id}] 为空，已忽略该映射。")
+                self.logger.warning(
+                    f"conversation_scope_map[{conversation_id}] 为空，已忽略该映射。"
+                )
                 continue
 
             if not self._scope_name_pattern.fullmatch(scope_name):
                 self.logger.warning(
-                    f"{field_name}[{conversation_id}] 的 scope 名非法: {scope_name}，已忽略。"
+                    f"conversation_scope_map[{conversation_id}] 的 scope 名非法: {scope_name}，已忽略。"
                 )
                 continue
 
             validated[conversation_id] = scope_name
 
-        return validated
-
-    def _refresh_scope_map(self) -> None:
-        """读取记忆域配置：新共享映射优先，旧字段仅作为兼容入口。"""
-        memory_scope_config = self.config.get("memory_scope", {}) or {}
-        if not isinstance(memory_scope_config, dict):
-            self.logger.warning("memory_scope 配置类型非法（需为 object），已回退为默认会话隔离。")
-            memory_scope_config = {}
-
-        self._legacy_public_scope = bool(memory_scope_config.get("legacy_public_scope", False))
-        shared_map = self._parse_scope_map(
-            memory_scope_config.get("shared_scopes", {}) or {},
-            "memory_scope.shared_scopes",
-        )
-        legacy_map = self._parse_scope_map(
-            self.config.get("conversation_scope_map", {}) or {},
-            "conversation_scope_map",
-        )
-
-        self._shared_scope_map = shared_map if shared_map else legacy_map
-        self._conversation_scope_map = self._shared_scope_map.copy()
-        if not shared_map and legacy_map:
-            self.logger.warning(
-                "已兼容读取 conversation_scope_map；建议迁移到 memory_scope.shared_scopes。"
-            )
-
-    def get_shared_scope_map(self) -> Dict[str, str]:
-        """获取已校验的共享记忆域映射。"""
-        return self._shared_scope_map.copy()
+        self._conversation_scope_map = validated
 
     def get_conversation_scope_map(self) -> Dict[str, str]:
-        """兼容旧调用：返回已校验的共享记忆域映射。"""
-        return self._shared_scope_map.copy()
-
-    @staticmethod
-    def build_private_scope(conversation_id: str) -> str:
-        """根据会话ID生成稳定、合法的私有记忆域名。"""
-        normalized_id = str(conversation_id or "").strip()
-        if not normalized_id:
-            raise ValueError("conversation_id 为空，无法生成私有 memory_scope")
-        digest = hashlib.sha1(normalized_id.encode("utf-8")).hexdigest()[:16]
-        return f"session_{digest}"
+        """获取已校验的会话映射。"""
+        return self._conversation_scope_map.copy()
 
     def resolve_memory_scope(self, conversation_id: str, persona_name: str = "") -> str:
-        """解析当前记忆域：共享映射命中则共享，未命中默认按会话隔离。"""
+        """解析当前记忆域：优先人格名键，其次会话ID键，未命中返回 public。"""
         scope, _, _ = self.resolve_memory_scope_with_source(
             conversation_id, persona_name=persona_name
         )
@@ -261,12 +230,15 @@ class PluginContext:
         normalized_id = str(conversation_id or "").strip()
         if not normalized_id:
             raise ValueError("conversation_id 为空，无法解析 memory_scope")
-        scope_by_conversation = self._shared_scope_map.get(normalized_id, "")
+        normalized_persona = str(persona_name or "").strip()
+        if normalized_persona:
+            scope_by_persona = self._conversation_scope_map.get(normalized_persona, "")
+            if scope_by_persona:
+                return scope_by_persona, "persona", normalized_persona
+        scope_by_conversation = self._conversation_scope_map.get(normalized_id, "")
         if scope_by_conversation:
-            return scope_by_conversation, "shared_conversation", normalized_id
-        if self._legacy_public_scope:
-            return "public", "legacy_public", "public"
-        return self.build_private_scope(normalized_id), "private_conversation", normalized_id
+            return scope_by_conversation, "conversation", normalized_id
+        return "public", "default", "public"
 
     @staticmethod
     def _normalize_persona_identifier(raw_value: Any) -> str:
@@ -281,90 +253,77 @@ class PluginContext:
 
     async def get_event_persona_name(self, event) -> str:
         """
-        获取当前会话实际生效的人格 ID。
-        参考 LivingMemory 的实现，按 AstrBot 主流程优先级读取：
-        1. sp.session_service_config.persona_id（/persona 等命令写入，最高优先级）
-        2. conversation_manager 当前会话的 conversation.persona_id
-        3. 全局默认人格
+        获取“当前事件最终生效的人格名”。
+        完全委托给 persona_manager.resolve_selected_persona，覆盖旧逻辑。
         """
         umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
         if not umo:
             self.logger.info("[睡眠] 跳过人格解析：umo为空 umo=%r", umo)
             return ""
-        cache_key = f"_angel_event_persona_name:{umo}"
-        cached = getattr(event, cache_key, None)
-        if isinstance(cached, str):
-            return cached
 
-        try:
-            session_config = await sp.get_async(
-                scope="umo",
-                scope_id=umo,
-                key="session_service_config",
-                default={},
+        persona_manager = getattr(self.astrbot_context, "persona_manager", None)
+        has_resolve_method = hasattr(persona_manager, "resolve_selected_persona")
+        if persona_manager is None or not has_resolve_method:
+            self.logger.info(
+                "[睡眠] 跳过人格解析：persona_manager不可用 umo=%r manager_is_none=%s has_resolve_selected_persona=%s",
+                umo,
+                persona_manager is None,
+                has_resolve_method,
             )
-            if isinstance(session_config, dict):
-                session_persona_id = self._normalize_persona_identifier(
-                    session_config.get("persona_id")
-                )
-                if session_persona_id:
-                    self.logger.info(
-                        "[事件人格] 来源=session_service_config umo=%s persona_id=%s",
-                        umo,
-                        session_persona_id,
-                    )
-                    setattr(event, cache_key, session_persona_id)
-                    return session_persona_id
-        except Exception as e:
-            self.logger.debug(f"读取 session_service_config 人格失败（已忽略）: {e}")
+            return ""
+
+        # 仅从事件读取会话人格ID（不再使用旧的 conversation_manager 回读逻辑）
+        conversation_persona_id = None
+        conversation = getattr(event, "conversation", None)
+        if conversation is not None:
+            raw_persona_id = getattr(conversation, "persona_id", None)
+            if raw_persona_id is not None:
+                text = str(raw_persona_id).strip()
+                conversation_persona_id = text if text else None
+
+        cfg = self.get_config(umo=umo)
+        if not isinstance(cfg, dict):
+            cfg = {}
+        provider_settings = cfg.get("provider_settings")
+        if provider_settings is None:
+            self.logger.warning(
+                "[睡眠] 人格解析配置缺失：provider_settings为空，将使用空配置 umo=%r",
+                umo,
+            )
+            provider_settings = {}
+        elif not isinstance(provider_settings, dict):
+            self.logger.warning(
+                "[睡眠] 人格解析配置非法：provider_settings类型=%s，将使用空配置 umo=%r",
+                type(provider_settings).__name__,
+                umo,
+            )
+            provider_settings = {}
+
+        platform_name = ""
+        if hasattr(event, "get_platform_name"):
+            platform_name = str(event.get_platform_name() or "").strip()
 
         try:
-            conversation_manager = getattr(self.astrbot_context, "conversation_manager", None)
-            if conversation_manager is not None:
-                session_id = await conversation_manager.get_curr_conversation_id(umo)
-                if session_id is not None:
-                    conversation = await conversation_manager.get_conversation(umo, session_id)
-                    conversation_persona_id = self._normalize_persona_identifier(
-                        getattr(conversation, "persona_id", None) if conversation else None
-                    )
-                    if conversation_persona_id == "[%None]":
-                        self.logger.info(
-                            "[事件人格] 来源=conversation 会话明确无人格 umo=%s session=%s",
-                            umo,
-                            session_id,
-                        )
-                        setattr(event, cache_key, "")
-                        return ""
-                    if conversation_persona_id:
-                        self.logger.info(
-                            "[事件人格] 来源=conversation umo=%s session=%s persona_id=%s",
-                            umo,
-                            session_id,
-                            conversation_persona_id,
-                        )
-                        setattr(event, cache_key, conversation_persona_id)
-                        return conversation_persona_id
-        except Exception as e:
-            self.logger.debug(f"读取 conversation_manager 人格失败（已忽略）: {e}")
+            persona_id, _persona, _, _ = await persona_manager.resolve_selected_persona(
+                umo=umo,
+                conversation_persona_id=conversation_persona_id,
+                platform_name=platform_name,
+                provider_settings=provider_settings,
+            )
+        except Exception:
+            self.logger.error(
+                "[睡眠] 人格解析异常：resolve_selected_persona失败 umo=%r manager_is_none=%s has_resolve_selected_persona=%s",
+                umo,
+                persona_manager is None,
+                hasattr(persona_manager, "resolve_selected_persona"),
+                exc_info=True,
+            )
+            return ""
 
-        try:
-            persona_manager = getattr(self.astrbot_context, "persona_manager", None)
-            if persona_manager is not None and hasattr(persona_manager, "get_default_persona_v3"):
-                default_persona = await persona_manager.get_default_persona_v3(umo=umo)
-                default_persona_id = self._normalize_persona_identifier(default_persona)
-                if default_persona_id:
-                    self.logger.info(
-                        "[事件人格] 来源=default umo=%s persona_id=%s",
-                        umo,
-                        default_persona_id,
-                    )
-                    setattr(event, cache_key, default_persona_id)
-                    return default_persona_id
-        except Exception as e:
-            self.logger.debug(f"读取默认人格失败（已忽略）: {e}")
-
-        setattr(event, cache_key, "")
-        return ""
+        selected = self._normalize_persona_identifier(persona_id)
+        if not selected:
+            return ""
+        return selected
 
     def get_event_conversation_id(self, event) -> str:
         """从事件中提取统一会话ID。"""

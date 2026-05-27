@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Optional
 
 from astrbot.api.provider import ProviderRequest
+from astrbot.core.agent.message import TextPart
+
 from ...llm_memory.models.data_models import BaseMemory
 
 
@@ -97,10 +99,6 @@ class DeepMindInjectionService:
         memory_scope: str = "public",
     ) -> None:
         deepmind = self.deepmind
-        if getattr(request, "_angel_memory_injected", False):
-            deepmind.logger.debug("[记忆注入] 本轮请求已注入过，跳过重复注入")
-            return
-
         system_context_parts = []
 
         instruction = (
@@ -178,22 +176,8 @@ class DeepMindInjectionService:
                 + "\n</system_context>"
             )
 
-            injection_method = getattr(deepmind.config, "injection_method", "user_message_before")
-            if injection_method not in {"user_message_before", "system_prompt", "user_message_after"}:
-                injection_method = "user_message_before"
-
-            # 参考 LivingMemory 的三种注入位置：用户消息前、系统提示末尾、用户消息后。
-            # contexts 注入均带 _no_save，避免写入持久化历史；标记保证同轮幂等。
-            if injection_method == "system_prompt":
-                current_system_prompt = str(getattr(request, "system_prompt", "") or "")
-                request.system_prompt = (
-                    f"{current_system_prompt}\n\n{full_system_context}"
-                    if current_system_prompt
-                    else full_system_context
-                )
-            elif injection_method == "user_message_after":
-                request.prompt = (request.prompt or "") + "\n\n" + full_system_context
-            else:
+            # 只有拿不到天使之心决策时，才使用 _no_save 的上下文注入方式，避免污染历史。
+            if not has_secretary_decision:
                 request.contexts.append(
                     {
                         "role": "user",
@@ -201,11 +185,6 @@ class DeepMindInjectionService:
                         "_no_save": True,
                     }
                 )
-
-            setattr(request, "_angel_memory_injected", True)
-            deepmind.logger.debug(
-                "[记忆注入] 已按 %s 注入 session=%s scope=%s",
-                injection_method,
-                session_id,
-                memory_scope,
-            )
+            else:
+                text_part = TextPart(text=full_system_context)
+                request.extra_user_content_parts.append(text_part)
