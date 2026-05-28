@@ -300,24 +300,16 @@ class AngelMemoryPlugin(Star):
         """
         self.logger.debug("开始执行 on_llm_response - 捕获响应数据")
         try:
-            # 将响应数据存储到event上下文中，供after_message_sent使用
-            if hasattr(event, "angelmemory_context"):
-                try:
-                    import json
-                    import time
-
-                    context_data = json.loads(event.angelmemory_context)
-                    # 添加响应数据
-                    context_data["llm_response"] = {
-                        "completion_text": getattr(response, "completion_text", str(response))
-                        if response
-                        else "",
-                        "timestamp": time.time(),
-                    }
-                    event.angelmemory_context = json.dumps(context_data)
-                    self.logger.debug("LLM响应数据已存储到event上下文")
-                except (json.JSONDecodeError, AttributeError, TypeError) as e:
-                    self.logger.warning(f"存储响应数据失败: {e}")
+            self.update_components()
+            deepmind = self.deepmind
+            if not deepmind and self.plugin_manager:
+                components = self.plugin_manager.get_initialized_components()
+                deepmind = components.get("deepmind")
+            if deepmind:
+                deepmind.ensure_event_memory_context(event, response)
+                self.logger.debug("LLM响应数据已存储到event上下文")
+            else:
+                self.logger.debug("DeepMind组件尚未初始化完成，暂无法创建记忆上下文")
 
         except Exception as e:
             self.logger.error(f"on_llm_response failed: {e}")
@@ -346,7 +338,7 @@ class AngelMemoryPlugin(Star):
 
             # 检查是否有需要处理的记忆数据
             if not hasattr(event, "angelmemory_context"):
-                self.logger.debug("没有记忆上下文，跳过记忆整理")
+                self.logger.warning("没有记忆上下文，跳过记忆整理")
                 return
 
             # 将记忆整理任务提交到事件循环，但不等待其完成，以避免阻塞主事件流程

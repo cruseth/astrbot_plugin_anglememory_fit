@@ -658,6 +658,79 @@ class DeepMind:
             normalized.append(item)
         return normalized
 
+    def ensure_event_memory_context(self, event: AstrMessageEvent, response=None) -> None:
+        """Ensure response-side consolidation has a minimal context to consume."""
+        response_text = (
+            getattr(response, "completion_text", str(response))
+            if response is not None
+            else ""
+        )
+        existing_context: Dict[str, Any] = {}
+        if hasattr(event, "angelmemory_context") and getattr(event, "angelmemory_context", None):
+            try:
+                parsed = json.loads(event.angelmemory_context)
+                if isinstance(parsed, dict):
+                    existing_context = parsed
+            except Exception:
+                existing_context = {}
+
+        session_id = existing_context.get("session_id") or self._get_session_id(event)
+        current_sender_id, current_sender_name = self._get_event_sender_identity(event)
+        bot_user_ids = self._get_event_bot_user_ids(event)
+
+        raw_chat_records = existing_context.get("raw_chat_records", [])
+        if not isinstance(raw_chat_records, list):
+            raw_chat_records = []
+        raw_chat_records = self._normalize_user_chat_records(
+            raw_chat_records,
+            current_sender_id=current_sender_id,
+            current_sender_name=current_sender_name,
+            bot_user_ids=bot_user_ids,
+        )
+        if not raw_chat_records:
+            message_text = self._extract_message_text(event) or ""
+            if message_text.strip():
+                raw_chat_records = [
+                    self._build_user_chat_record(
+                        content=message_text,
+                        sender_id=current_sender_id,
+                        sender_name=current_sender_name,
+                        timestamp=time.time(),
+                    )
+                ]
+
+        recall_query = str(existing_context.get("recall_query", "") or "").strip()
+        if not recall_query and raw_chat_records:
+            recall_query, user_list = self.prompt_builder.format_chat_records(
+                raw_chat_records,
+                excluded_sender_ids=bot_user_ids,
+            )
+        else:
+            user_list = existing_context.get("user_list", [])
+            if not isinstance(user_list, list):
+                user_list = []
+
+        existing_context.update(
+            {
+                "memories": existing_context.get("memories", []),
+                "recall_query": recall_query,
+                "recall_time": existing_context.get("recall_time", time.time()),
+                "session_id": session_id,
+                "user_list": user_list,
+                "raw_chat_records": raw_chat_records,
+                "raw_memories": existing_context.get("raw_memories", []),
+                "raw_notes": existing_context.get("raw_notes", []),
+                "core_topic": existing_context.get("core_topic", ""),
+                "memory_id_mapping": existing_context.get("memory_id_mapping", {}),
+                "note_id_mapping": existing_context.get("note_id_mapping", {}),
+                "llm_response": {
+                    "completion_text": response_text,
+                    "timestamp": time.time(),
+                },
+            }
+        )
+        event.angelmemory_context = json.dumps(existing_context)
+
     def _memories_to_json(self, memories: List) -> List[Dict[str, Any]]:
         """
         将记忆对象统一转换为JSON格式
